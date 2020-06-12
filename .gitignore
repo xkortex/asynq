@@ -19,3 +19,6 @@
 
 # Ignore asynq config file
 .asynq.*
+
+# IDE configs
+.idea
