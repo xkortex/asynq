@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"github.com/hibiken/asynq"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"io"
 	"log"
 	"os"
@@ -32,15 +33,21 @@ var serveCmd = &cobra.Command{
 func init() {
 	rootCmd.AddCommand(serveCmd)
 	rootCmd.PersistentFlags().BoolP("privileged", "P", false, "Whitelist all commands - MAY BE RISKY")
+	rootCmd.PersistentFlags().BoolP("echo", "e", false, "echo subprocess values to stdout/stderr")
 	rootCmd.PersistentFlags().IntP("jobs", "j", runtime.NumCPU(), "run n jobs in parallel (default value depends on your device)")
 
 }
 
 func serve(cmd *cobra.Command, args []string) {
-	nJobs, _ := cmd.Flags().GetInt("jobs")
 	privileged, _ := cmd.Flags().GetBool("privileged")
-	uri := "localhost:6379"
-	r := asynq.RedisClientOpt{Addr: uri}
+	nJobs, _ := cmd.Flags().GetInt("jobs")
+	echo, _ := cmd.Flags().GetBool("echo")
+
+	uri := viper.GetString("uri")
+	db := viper.GetInt("db")
+	password := viper.GetString("password")
+
+	r := asynq.RedisClientOpt{Addr: uri, DB: db, Password: password}
 	srv := asynq.NewServer(r, asynq.Config{
 		Concurrency: nJobs,
 	})
@@ -48,7 +55,7 @@ func serve(cmd *cobra.Command, args []string) {
 		return CheckCommand(name, privileged, args)
 	}
 	handler := func(ctx context.Context, t *asynq.Task) error {
-		return HandleExeqCommand(ctx, t, checkCommand)
+		return HandleExeqCommand(ctx, t, checkCommand, echo)
 	}
 	log.Printf("Staring exeq server on %s with %d workers\n", uri, nJobs)
 	if privileged {
@@ -83,7 +90,7 @@ func CheckCommand(name string, privileged bool, whitelist []string) error {
 	return fmt.Errorf("`%s` is not a whitelisted executable. Allowed: %v\n", name, whitelist)
 }
 
-func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(string) error) error {
+func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(string) error, echo bool) error {
 	name, err := t.Payload.GetString("name")
 	if err != nil {
 		return err
@@ -101,52 +108,57 @@ func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(str
 	var wg sync.WaitGroup
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	stdout, _ := cmd.StdoutPipe()
-	stderr, _ := cmd.StderrPipe()
+	
+	if ! echo {
+		stdout, _ := cmd.StdoutPipe()
+		stderr, _ := cmd.StderrPipe()
 
-	chOut := make(chan []byte)
-	chErr := make(chan []byte)
-	defer close(chOut)
-	defer close(chErr)
+		chOut := make(chan []byte)
+		chErr := make(chan []byte)
+		defer close(chOut)
+		defer close(chErr)
 
-	wg.Add(2)
-	go ScannerChannel(stdout, chOut, &wg)
-	go ScannerChannel(stderr, chErr, &wg)
+		wg.Add(2)
+		go ScannerChannel(stdout, chOut, &wg)
+		go ScannerChannel(stderr, chErr, &wg)
 
-	done := make(chan struct{})
-	defer close(done)
+		done := make(chan struct{})
+		defer close(done)
 
-	cmd.Start()
-	// Mirror stdout/stderr to screen
-	// todo: make this quiet-able
-	go func() {
-		buf_out := bufio.NewWriter(os.Stdout)
-		buf_err := bufio.NewWriter(os.Stderr)
-		var chunk_out, chunk_err []byte
-		for {
 
-			select {
-			case <-done:
-				return
-			case <-ctx.Done():
-				err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "Error killing subprocess %d during "+
-						"context cancel: %v\n", cmd.Process.Pid, err)
+		cmd.Start()
+		// Mirror stdout/stderr to screen
+		go func() {
+			buf_out := bufio.NewWriter(os.Stdout)
+			buf_err := bufio.NewWriter(os.Stderr)
+			var chunk_out, chunk_err []byte
+			for {
+
+				select {
+				case <-done:
+					return
+				case <-ctx.Done():
+					err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+					if err != nil {
+						fmt.Fprintf(os.Stderr, "Error killing subprocess %d during "+
+							"context cancel: %v\n", cmd.Process.Pid, err)
+					}
+					return
+				case chunk_out = <-chOut:
+					buf_out.Write(chunk_out)
+					buf_out.Flush()
+				case chunk_err = <-chErr:
+					buf_err.Write(chunk_err)
+					buf_err.Flush()
+
 				}
-				return
-			case chunk_out = <-chOut:
-				buf_out.Write(chunk_out)
-				buf_out.Flush()
-			case chunk_err = <-chErr:
-				buf_err.Write(chunk_err)
-				buf_err.Flush()
-
+				chunk_out = nil
+				chunk_err = nil
 			}
-			chunk_out = nil
-			chunk_err = nil
-		}
-	}()
+		}()
+	} else {
+		cmd.Start()
+	}
 
 	if err := cmd.Wait(); err != nil {
 		if exiterr, ok := err.(*exec.ExitError); ok {

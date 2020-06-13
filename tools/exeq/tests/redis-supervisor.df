@@ -1,0 +1,18 @@
+FROM golang:1.14.4-alpine
+
+RUN  apk add --update --no-cache \
+        bash \
+        curl \
+        ca-certificates \
+        git \
+        jq \
+        redis \
+        supervisor \
+        tar
+
+
+COPY tools/exeq/tests/supervisord.conf /etc/supervisord.conf
+COPY tools/exeq/tests/sd.redis.conf /etc/supervisord.d/redis.conf
+
+ENTRYPOINT ["supervisord", "--nodaemon", "--configuration", "/etc/supervisord.conf"]
+

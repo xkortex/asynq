@@ -7,6 +7,7 @@ package cmd
 import (
 	"github.com/hibiken/asynq"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 	"log"
 )
 
@@ -30,8 +31,11 @@ func init() {
 }
 
 func submit(cmd *cobra.Command, args []string) {
-	uri := "localhost:6379"
-	r := asynq.RedisClientOpt{Addr: uri}
+	uri := viper.GetString("uri")
+	db := viper.GetInt("db")
+	password := viper.GetString("password")
+
+	r := asynq.RedisClientOpt{Addr: uri, DB: db, Password: password}
 	client := asynq.NewClient(r)
 	log.Printf("Submitting to %s: %v\n", uri, args)
 	t1 := NewExecCmd(args[0], args[1:])
