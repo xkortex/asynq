@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"github.com/hibiken/asynq"
 	"github.com/mitchellh/go-homedir"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"os"
 )
 
 const (
@@ -22,6 +22,7 @@ var (
 	uri      string
 	db       int
 	password string
+	Version  = "unset"
 )
 
 func NewExecCmd(name string, args []string) *asynq.Task {
@@ -32,17 +33,18 @@ func NewExecCmd(name string, args []string) *asynq.Task {
 var rootCmd = &cobra.Command{
 	Use:   "exeq",
 	Short: "A tool for submitting executable batches to asynq queues",
-	Long: `exeq submits executable commands to queues managed by asynq.
-	These commands are picked up by asynq servers and run on 
-	available workers`,
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
 // This is called by main.main(). It only needs to happen once to the rootCmd.
 func Execute() {
+	rootCmd.Version = Version
+	rootCmd.Long = fmt.Sprintf(` exeq %s
+exeq submits executable commands to queues managed by asynq.
+These commands are picked up by asynq servers and run on 
+available workers`, Version)
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
+		log.Fatal().Err(err).Msg("Failed to cmd.Execute()")
 	}
 }
 
@@ -67,19 +69,18 @@ func initConfig() {
 		// Find home directory.
 		home, err := homedir.Dir()
 		if err != nil {
-			fmt.Println(err)
-			os.Exit(1)
+			log.Warn().Err(err).Msg("Failed to get home directory. Skipping config file")
+		} else {
+			// Search config in home directory with name ".asynq" (without extension).
+			viper.AddConfigPath(home)
+			viper.SetConfigName(".asynq")
 		}
-
-		// Search config in home directory with name ".asynq" (without extension).
-		viper.AddConfigPath(home)
-		viper.SetConfigName(".asynq")
 	}
 
 	viper.AutomaticEnv() // read in environment variables that match
 
 	// If a config file is found, read it in.
 	if err := viper.ReadInConfig(); err == nil {
-		fmt.Println("Using config file:", viper.ConfigFileUsed())
+		log.Info().Str("file", viper.ConfigFileUsed()).Msg("configFileUsed")
 	}
 }

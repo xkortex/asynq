@@ -6,6 +6,9 @@ package main
 
 import "github.com/hibiken/asynq/tools/exeq/cmd"
 
+var Version = "dev"
+
 func main() {
+	cmd.Version = Version
 	cmd.Execute()
 }

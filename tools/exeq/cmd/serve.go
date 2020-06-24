@@ -10,10 +10,10 @@ import (
 	"context"
 	"fmt"
 	"github.com/hibiken/asynq"
+	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"runtime"
@@ -23,11 +23,11 @@ import (
 
 // serverCmd represents the serve command
 var serveCmd = &cobra.Command{
-	Use:   "serve",
-	Short: "Start an exeq server",
-	Long:  `todo`,
-
-	Run: serve,
+	Use:     "serve",
+	Short:   "Start an exeq server",
+	Long:    `todo`,
+	Aliases: []string{"s", "server"},
+	Run:     serve,
 }
 
 func init() {
@@ -47,27 +47,29 @@ func serve(cmd *cobra.Command, args []string) {
 	db := viper.GetInt("db")
 	password := viper.GetString("password")
 
+	whitelist := args
+
 	r := asynq.RedisClientOpt{Addr: uri, DB: db, Password: password}
 	srv := asynq.NewServer(r, asynq.Config{
 		Concurrency: nJobs,
 	})
 	checkCommand := func(name string) error {
-		return CheckCommand(name, privileged, args)
+		return CheckCommand(name, privileged, whitelist)
 	}
 	handler := func(ctx context.Context, t *asynq.Task) error {
 		return HandleExeqCommand(ctx, t, checkCommand, echo)
 	}
-	log.Printf("Staring exeq server on %s with %d workers\n", uri, nJobs)
-	if privileged {
-		log.Println("RUNNING IN PRIVILEGED mode")
-	} else {
-		log.Printf("Whitelisted executables: %v \n", args)
-	}
+	log.Info().Str("uri", uri).
+		Int("workers", nJobs).
+		Bool("privileged", privileged).
+		Strs("whitelist", whitelist).
+		Msg("Starting exeq server")
+
 	mux := asynq.NewServeMux()
 	mux.HandleFunc(ExeqCommand, handler)
 
 	if err := srv.Run(mux); err != nil {
-		log.Fatal(err)
+		log.Fatal().Err(err)
 	}
 }
 
@@ -103,13 +105,13 @@ func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(str
 	if err != nil {
 		return err
 	}
-	log.Printf("Running command: `%s %v`\n", name, args)
+	log.Info().Str("name", name).Strs("args", args).Msg("Run command")
 
 	var wg sync.WaitGroup
 	cmd := exec.Command(name, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	
-	if ! echo {
+
+	if echo {
 		stdout, _ := cmd.StdoutPipe()
 		stderr, _ := cmd.StderrPipe()
 
@@ -125,7 +127,6 @@ func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(str
 		done := make(chan struct{})
 		defer close(done)
 
-
 		cmd.Start()
 		// Mirror stdout/stderr to screen
 		go func() {
@@ -140,8 +141,7 @@ func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(str
 				case <-ctx.Done():
 					err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 					if err != nil {
-						fmt.Fprintf(os.Stderr, "Error killing subprocess %d during "+
-							"context cancel: %v\n", cmd.Process.Pid, err)
+						log.Warn().Int("pid", cmd.Process.Pid).Err(err).Msg("Error killing subprocess during context cancel")
 					}
 					return
 				case chunk_out = <-chOut:
@@ -164,13 +164,14 @@ func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(str
 		if exiterr, ok := err.(*exec.ExitError); ok {
 			// The program has exited with an exit code != 0
 			if status, ok := exiterr.Sys().(syscall.WaitStatus); ok {
-				log.Printf("Exit Status: %d\n", status.ExitStatus())
+				log.Warn().Int("ExitStatus", status.ExitStatus()).Msg("Exit Status")
 			}
 		} else {
-			log.Printf("cmd.Wait error: %v\n", err)
+			log.Warn().Err(err).Msg("cmd.Wait error")
 		}
 	}
 	wg.Wait()
+	log.Debug().Str("name", name).Msg("complete")
 	return nil
 }
 

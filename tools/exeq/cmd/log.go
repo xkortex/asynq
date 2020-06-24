@@ -11,22 +11,22 @@ import (
 )
 
 var logCmd = &cobra.Command{
-	Use:     "log [OPTIONS] -- NAME [ARGS]",
-	Short:   "Submits a log to redis",
-	Long: `exeq log will submit a log to redis.
+	Use:   "log [OPTIONS] -- NAME [ARGS]",
+	Short: "Submits a log to redis",
+	Long: `exeq log will publish a log to redis.
 	This is mostly a convenience function to easily get data into redis from commands,
 	using the existing redis config`,
-	Run:  submitLog,
+	Run: submitLog,
 }
 
 func init() {
-	rootCmd.AddCommand(submitCmd)
+	rootCmd.AddCommand(logCmd)
 }
 
 func submitLog(cmd *cobra.Command, args []string) {
 	uri := "localhost:6379"
 	r := asynq.RedisClientOpt{Addr: uri}
 	asynq.NewClient(r)
-	log.Printf("submit log%s: %v\n", uri, args)
+	log.Printf("publish log%s: %v\n", uri, args)
 	// todo: implement
 }
