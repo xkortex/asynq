@@ -66,7 +66,17 @@ func serve(cmd *cobra.Command, args []string) {
 		Msg("Starting exeq server")
 
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(ExeqCommand, handler)
+	if privileged {
+		mux.HandleFunc(ExeqCommand, handler) // handles any task which matches the prefix exec:command
+		log.Info().Str("taskname", ExeqCommand).Msg("registered")
+
+	} else {
+		for _, name := range whitelist {
+			taskname := ExeqCommand+":"+name
+			log.Info().Str("taskname", taskname).Msg("registered")
+			mux.HandleFunc(taskname, handler)
+		}
+	}
 
 	if err := srv.Run(mux); err != nil {
 		log.Fatal().Err(err)
