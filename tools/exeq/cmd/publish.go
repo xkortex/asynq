@@ -27,13 +27,17 @@ Example: exeq sub ls /`,
 }
 
 func init() {
+	pubCmd.PersistentFlags().StringVarP(&queue,"queue", "Q", "exeq", "Publish to a specific queue (default queue is exeq)")
+	viper.BindPFlag("queue", pubCmd.PersistentFlags().Lookup("queue"))
 	rootCmd.AddCommand(pubCmd)
+
 }
 
 func publish(cmd *cobra.Command, args []string) {
 	uri := viper.GetString("uri")
 	db := viper.GetInt("db")
 	password := viper.GetString("password")
+	queue := viper.GetString("queue")
 
 	r := asynq.RedisClientOpt{Addr: uri, DB: db, Password: password}
 	client := asynq.NewClient(r)
@@ -41,7 +45,7 @@ func publish(cmd *cobra.Command, args []string) {
 	t1 := NewExecCmd(args[0], args[1:])
 
 	// Process the task immediately.
-	err := client.Enqueue(t1)
+	err := client.Enqueue(t1, asynq.Queue(queue))
 	if err != nil {
 		log.Fatal().Err(err).Msg("Enqueue failed")
 	}

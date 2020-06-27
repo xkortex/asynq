@@ -17,6 +17,8 @@ import (
 	"os"
 	"os/exec"
 	"runtime"
+	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 )
@@ -31,10 +33,12 @@ var serveCmd = &cobra.Command{
 }
 
 func init() {
+	serveCmd.PersistentFlags().StringVarP(&serveQueues,"serveQueues", "S", "exeq", "Serve on specific queue(s), ;-delimited. Can set priority e.g. 'foo;bar=5' (default queue is exeq)")
+	serveCmd.PersistentFlags().BoolP("privileged", "P", false, "Whitelist all commands - MAY BE RISKY")
+	serveCmd.PersistentFlags().BoolP("echo", "e", false, "echo subprocess values to stdout/stderr")
+	serveCmd.PersistentFlags().IntP("jobs", "j", runtime.NumCPU(), "run n jobs in parallel (default value depends on your device)")
+	viper.BindPFlag("serveQueues", serveCmd.PersistentFlags().Lookup("serveQueues"))
 	rootCmd.AddCommand(serveCmd)
-	rootCmd.PersistentFlags().BoolP("privileged", "P", false, "Whitelist all commands - MAY BE RISKY")
-	rootCmd.PersistentFlags().BoolP("echo", "e", false, "echo subprocess values to stdout/stderr")
-	rootCmd.PersistentFlags().IntP("jobs", "j", runtime.NumCPU(), "run n jobs in parallel (default value depends on your device)")
 
 }
 
@@ -46,12 +50,44 @@ func serve(cmd *cobra.Command, args []string) {
 	uri := viper.GetString("uri")
 	db := viper.GetInt("db")
 	password := viper.GetString("password")
+	serveQueues_s := viper.GetString("serveQueues")
+	serveQueues := strings.Split(serveQueues_s, ";")
+
+	queues := map[string]int{}  // todo: improve dedicated command queue handling
+	for _, q := range serveQueues {
+		parts := strings.Split(q, "=")
+		priority := 5
+		queueName := ""
+		if len(parts) > 2 {
+			log.Error().Str("string", q).Msg("Could not parse queue priority, too many parts")
+		} else if len(parts) == 2 {
+			i, err := strconv.Atoi(parts[1])
+			if err != nil {
+				log.Error().Err(err).Str("string", q).Msg("Could not parse queue priority, failed to parse int")
+			} else {
+				priority = i
+				queueName = parts[0]
+			}
+		} else {
+			queueName = parts[0]
+		}
+		queues[queueName] = priority
+		log.Info().Str("queue", queueName).Int("priority", priority).Msg("registered")
+	}
+	if len(queues) == 0 {
+		log.Fatal().Msg("No queues registered, check the serveQueues option")
+	}
 
 	whitelist := args
+
+	if !privileged && len(whitelist) == 0 {
+		log.Fatal().Msg("No whitelisted executables and privileged flag not set")
+	}
 
 	r := asynq.RedisClientOpt{Addr: uri, DB: db, Password: password}
 	srv := asynq.NewServer(r, asynq.Config{
 		Concurrency: nJobs,
+		Queues: queues,
 	})
 	checkCommand := func(name string) error {
 		return CheckCommand(name, privileged, whitelist)
@@ -62,21 +98,13 @@ func serve(cmd *cobra.Command, args []string) {
 	log.Info().Str("uri", uri).
 		Int("workers", nJobs).
 		Bool("privileged", privileged).
-		Strs("whitelist", whitelist).
 		Msg("Starting exeq server")
 
 	mux := asynq.NewServeMux()
-	if privileged {
-		mux.HandleFunc(ExeqCommand, handler) // handles any task which matches the prefix exec:command
-		log.Info().Str("taskname", ExeqCommand).Msg("registered")
-
-	} else {
-		for _, name := range whitelist {
-			taskname := ExeqCommand+":"+name
-			log.Info().Str("taskname", taskname).Msg("registered")
-			mux.HandleFunc(taskname, handler)
-		}
-	}
+	mux.HandleFunc(ExeqCommand, handler) // handles any task which matches the prefix exec:command
+	log.Debug().Str("taskname", ExeqCommand).
+		Strs("whitelist", whitelist).
+		Msg("registered")
 
 	if err := srv.Run(mux); err != nil {
 		log.Fatal().Err(err)
