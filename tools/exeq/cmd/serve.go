@@ -14,7 +14,6 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"io"
-	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -33,8 +32,9 @@ var serveCmd = &cobra.Command{
 }
 
 func init() {
-	serveCmd.PersistentFlags().StringVarP(&serveQueues,"serveQueues", "S", "exeq", "Serve on specific queue(s), ;-delimited. Can set priority e.g. 'foo;bar=5' (default queue is exeq)")
+	serveCmd.PersistentFlags().StringVarP(&serveQueues, "serveQueues", "S", "exeq", "Serve on specific queue(s), ;-delimited. Can set priority e.g. 'foo;bar=5' (default queue is exeq)")
 	serveCmd.PersistentFlags().BoolP("privileged", "P", false, "Whitelist all commands - MAY BE RISKY")
+	serveCmd.PersistentFlags().BoolP("allow_write", "W", false, "Allow file redirect in command - MAY BE RISKY")
 	serveCmd.PersistentFlags().BoolP("echo", "e", false, "echo subprocess values to stdout/stderr")
 	serveCmd.PersistentFlags().IntP("jobs", "j", runtime.NumCPU(), "run n jobs in parallel (default value depends on your device)")
 	viper.BindPFlag("serveQueues", serveCmd.PersistentFlags().Lookup("serveQueues"))
@@ -42,8 +42,10 @@ func init() {
 
 }
 
+
 func serve(cmd *cobra.Command, args []string) {
 	privileged, _ := cmd.Flags().GetBool("privileged")
+	allow_write, _ := cmd.Flags().GetBool("allow_write")
 	nJobs, _ := cmd.Flags().GetInt("jobs")
 	echo, _ := cmd.Flags().GetBool("echo")
 
@@ -53,7 +55,7 @@ func serve(cmd *cobra.Command, args []string) {
 	serveQueues_s := viper.GetString("serveQueues")
 	serveQueues := strings.Split(serveQueues_s, ";")
 
-	queues := map[string]int{}  // todo: improve dedicated command queue handling
+	queues := map[string]int{} // todo: improve dedicated command queue handling
 	for _, q := range serveQueues {
 		parts := strings.Split(q, "=")
 		priority := 5
@@ -87,13 +89,13 @@ func serve(cmd *cobra.Command, args []string) {
 	r := asynq.RedisClientOpt{Addr: uri, DB: db, Password: password}
 	srv := asynq.NewServer(r, asynq.Config{
 		Concurrency: nJobs,
-		Queues: queues,
+		Queues:      queues,
 	})
 	checkCommand := func(name string) error {
 		return CheckCommand(name, privileged, whitelist)
 	}
 	handler := func(ctx context.Context, t *asynq.Task) error {
-		return HandleExeqCommand(ctx, t, checkCommand, echo)
+		return HandleExeqCommand(ctx, t, checkCommand, echo, allow_write)
 	}
 	log.Info().Str("uri", uri).
 		Int("workers", nJobs).
@@ -101,8 +103,8 @@ func serve(cmd *cobra.Command, args []string) {
 		Msg("Starting exeq server")
 
 	mux := asynq.NewServeMux()
-	mux.HandleFunc(ExeqCommand, handler) // handles any task which matches the prefix exec:command
-	log.Debug().Str("taskname", ExeqCommand).
+	mux.HandleFunc(TypenameExeqCommand, handler) // handles any task which matches the prefix exec:command
+	log.Debug().Str("taskname", TypenameExeqCommand).
 		Strs("whitelist", whitelist).
 		Msg("registered")
 
@@ -130,28 +132,38 @@ func CheckCommand(name string, privileged bool, whitelist []string) error {
 	return fmt.Errorf("`%s` is not a whitelisted executable. Allowed: %v\n", name, whitelist)
 }
 
-func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(string) error, echo bool) error {
-	name, err := t.Payload.GetString("name")
+// This is the primary callback for processing commands
+// It must be curried to a func of (Context, Task) -> (error) to be accepted by the server callback handler.
+func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(string) error, echo bool, allow_write bool) error {
+	ecmd, err := UnpackCommand(t)
 	if err != nil {
 		return err
 	}
-	args, err := t.Payload.GetStringSlice("args")
+	err = checkCommand(ecmd.Name)
+
 	if err != nil {
 		return err
 	}
-	err = checkCommand(name)
-	if err != nil {
-		return err
-	}
-	log.Info().Str("name", name).Strs("args", args).Msg("Run command")
+	log.Info().Str("name", ecmd.Name).Strs("args", ecmd.Args).
+		Str("stdout", ecmd.StdoutFile).Str("stderr", ecmd.StderrFile).Msg("Run command")
 
 	var wg sync.WaitGroup
-	cmd := exec.Command(name, args...)
+	cmd := exec.Command(ecmd.Name, ecmd.Args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
-	if echo {
+	if echo || allow_write {
 		stdout, _ := cmd.StdoutPipe()
 		stderr, _ := cmd.StderrPipe()
+		fStruct, err := getFileStruct(ecmd.StdoutFile, ecmd.StderrFile, allow_write)
+		if err != nil {
+			return err
+		}
+		defer fStruct.EClose()
+
+		w, err := getMultiWriters(fStruct, echo)
+		if err != nil {
+			return err
+		}
 
 		chOut := make(chan []byte)
 		chErr := make(chan []byte)
@@ -166,10 +178,8 @@ func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(str
 		defer close(done)
 
 		cmd.Start()
-		// Mirror stdout/stderr to screen
+		// Mirror stdout/stderr to screen and/or file. This could use some work
 		go func() {
-			buf_out := bufio.NewWriter(os.Stdout)
-			buf_err := bufio.NewWriter(os.Stderr)
 			var chunk_out, chunk_err []byte
 			for {
 
@@ -183,15 +193,20 @@ func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(str
 					}
 					return
 				case chunk_out = <-chOut:
-					buf_out.Write(chunk_out)
-					buf_out.Flush()
+					_, err := w.out.Write(chunk_out)
+					if err != nil {
+						log.Panic().Err(err).Msg("Error writing to stdout files")
+					}
 				case chunk_err = <-chErr:
-					buf_err.Write(chunk_err)
-					buf_err.Flush()
-
+					_, err := w.err.Write(chunk_err)
+					if err != nil {
+						log.Panic().Err(err).Msg("Error writing to stderr files")
+					}
 				}
 				chunk_out = nil
 				chunk_err = nil
+				w.out.Flush()
+				w.err.Flush()
 			}
 		}()
 	} else {
@@ -209,7 +224,7 @@ func HandleExeqCommand(ctx context.Context, t *asynq.Task, checkCommand func(str
 		}
 	}
 	wg.Wait()
-	log.Debug().Str("name", name).Msg("complete")
+	log.Debug().Str("name", ecmd.Name).Msg("complete")
 	return nil
 }
 

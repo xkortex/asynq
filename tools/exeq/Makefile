@@ -12,6 +12,9 @@ get:
 fmt:
 	go fmt ./...
 
+test:
+	go test ./...
+
 linux_64:
 	CGO_ENABLED=${CGO_EN} GOOS=linux GOARCH=amd64 go build -i -ldflags="-X 'main.Version=${VERSION}'" -o ${GOPATH}/bin/build/exeq-linux_amd64
 

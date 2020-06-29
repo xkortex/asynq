@@ -1,6 +1,10 @@
-FROM golang:1.14.4-alpine
+FROM redis:6
+# We start from the redis container because I dont wanna mess with the config
+# https://github.com/docker-library/redis
 
-RUN  apk add --update --no-cache \
+RUN apt-get update -qq &&\
+    apt-get install -qq curl &&\
+    apt-get install -qq --no-install-recommends \
         bash \
         curl \
         ca-certificates \
@@ -10,9 +14,8 @@ RUN  apk add --update --no-cache \
         supervisor \
         tar
 
-
 COPY tools/exeq/tests/supervisord.conf /etc/supervisord.conf
 COPY tools/exeq/tests/sd.redis.conf /etc/supervisord.d/redis.conf
 
 ENTRYPOINT ["supervisord", "--nodaemon", "--configuration", "/etc/supervisord.conf"]
-
+CMD []

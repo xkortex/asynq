@@ -27,7 +27,7 @@ Example: exeq sub ls /`,
 }
 
 func init() {
-	pubCmd.PersistentFlags().StringVarP(&queue,"queue", "Q", "exeq", "Publish to a specific queue (default queue is exeq)")
+	pubCmd.PersistentFlags().StringVarP(&queue, "queue", "Q", "exeq", "Publish to a specific queue (default queue is exeq)")
 	viper.BindPFlag("queue", pubCmd.PersistentFlags().Lookup("queue"))
 	rootCmd.AddCommand(pubCmd)
 
@@ -38,14 +38,23 @@ func publish(cmd *cobra.Command, args []string) {
 	db := viper.GetInt("db")
 	password := viper.GetString("password")
 	queue := viper.GetString("queue")
+	var err error
 
 	r := asynq.RedisClientOpt{Addr: uri, DB: db, Password: password}
 	client := asynq.NewClient(r)
-	log.Info().Str("uri", uri).Strs("args", args).Msg("Publishing")
-	t1 := NewExecCmd(args[0], args[1:])
+	log.Debug().Strs("args", args).Msg("Raw input")
+
+	ecmd, err := ParseExeqCommand(args[0], args[1:])
+	if err != nil {
+		log.Fatal().Err(err).Msg("Failed to parse input command")
+	}
+
+	log.Info().Str("uri", uri).Str("name", ecmd.Name).Strs("args", ecmd.Args).
+		Str("stdout", ecmd.StdoutFile).Str("stderr", ecmd.StderrFile).Msg("Publishing")
+	t1 := NewExecCmd(ecmd)
 
 	// Process the task immediately.
-	err := client.Enqueue(t1, asynq.Queue(queue))
+	err = client.Enqueue(t1, asynq.Queue(queue))
 	if err != nil {
 		log.Fatal().Err(err).Msg("Enqueue failed")
 	}

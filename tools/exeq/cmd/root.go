@@ -6,7 +6,6 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/hibiken/asynq"
 	"github.com/mitchellh/go-homedir"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
@@ -14,7 +13,7 @@ import (
 )
 
 const (
-	ExeqCommand = "exec:command"
+	TypenameExeqCommand = "exec:command"
 )
 
 var (
@@ -27,8 +26,11 @@ var (
 	Version     = "unset"
 )
 
-func NewExecCmd(name string, args []string) *asynq.Task {
-	return asynq.NewTask(ExeqCommand, map[string]interface{}{"name": name, "args": args})
+type ExeqCommand struct {
+	Name       string   `json:"name"`       // name of the executable subcommand
+	Args       []string `json:"args"`       // list of flags/args to be passed to the subcommand
+	StdoutFile string   `json:"stdoutFile"` // if specified, redirect stdout to this file
+	StderrFile string   `json:"stderrFile"` // if specified, redirect stderr to this file
 }
 
 // rootCmd represents the base command when called without any subcommands
