@@ -14,6 +14,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"io"
+	"os"
 	"os/exec"
 	"runtime"
 	"strconv"
@@ -32,16 +33,25 @@ var serveCmd = &cobra.Command{
 }
 
 func init() {
+	if os.Getenv("HOSTNAME") == "" {
+		hostname, err := os.Hostname()
+		if err != nil {
+			panic(err) // in theory, this should never happen
+		}
+		log.Warn().Str("HOSTNAME", hostname).Msg("HOSTNAME was unset, set to os.Hostname()")
+		os.Setenv("HOSTNAME", hostname)
+	}
+
 	serveCmd.PersistentFlags().StringVarP(&serveQueues, "serveQueues", "S", "exeq", "Serve on specific queue(s), ;-delimited. Can set priority e.g. 'foo;bar=5' (default queue is exeq)")
 	serveCmd.PersistentFlags().BoolP("privileged", "P", false, "Whitelist all commands - MAY BE RISKY")
 	serveCmd.PersistentFlags().BoolP("allow_write", "W", false, "Allow file redirect in command - MAY BE RISKY")
 	serveCmd.PersistentFlags().BoolP("echo", "e", false, "echo subprocess values to stdout/stderr")
+	serveCmd.PersistentFlags().BoolP("hostqueue", "H", false, "Automatically include the queue `exeq+$HOSTNAME`. Use with -S';' to disable default queue")
 	serveCmd.PersistentFlags().IntP("jobs", "j", runtime.NumCPU(), "run n jobs in parallel (default value depends on your device)")
 	viper.BindPFlag("serveQueues", serveCmd.PersistentFlags().Lookup("serveQueues"))
 	rootCmd.AddCommand(serveCmd)
 
 }
-
 
 func serve(cmd *cobra.Command, args []string) {
 	privileged, _ := cmd.Flags().GetBool("privileged")
@@ -54,9 +64,19 @@ func serve(cmd *cobra.Command, args []string) {
 	password := viper.GetString("password")
 	serveQueues_s := viper.GetString("serveQueues")
 	serveQueues := strings.Split(serveQueues_s, ";")
-
+	if hostqueue, _ := cmd.Flags().GetBool("hostqueue"); hostqueue {
+		host, err := os.Hostname()
+		log.Debug().Msg("here")
+		if err != nil {
+			log.Fatal().Err(nil).Msg("Failed to get hostname")
+		}
+		serveQueues = append(serveQueues, "exeq+"+host)
+	}
 	queues := map[string]int{} // todo: improve dedicated command queue handling
 	for _, q := range serveQueues {
+		if len(q) == 0 {
+			continue
+		}
 		parts := strings.Split(q, "=")
 		priority := 5
 		queueName := ""
@@ -76,10 +96,10 @@ func serve(cmd *cobra.Command, args []string) {
 		queues[queueName] = priority
 		log.Info().Str("queue", queueName).Int("priority", priority).Msg("registered")
 	}
+
 	if len(queues) == 0 {
 		log.Fatal().Msg("No queues registered, check the serveQueues option")
 	}
-
 	whitelist := args
 
 	if !privileged && len(whitelist) == 0 {
@@ -100,6 +120,7 @@ func serve(cmd *cobra.Command, args []string) {
 	log.Info().Str("uri", uri).
 		Int("workers", nJobs).
 		Bool("privileged", privileged).
+		Str("version", Version).
 		Msg("Starting exeq server")
 
 	mux := asynq.NewServeMux()

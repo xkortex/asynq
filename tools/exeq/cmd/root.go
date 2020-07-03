@@ -7,6 +7,7 @@ package cmd
 import (
 	"fmt"
 	"github.com/mitchellh/go-homedir"
+	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -21,7 +22,7 @@ var (
 	uri         string
 	db          int
 	password    string
-	queue       string
+	loglevel    string
 	serveQueues string
 	Version     = "unset"
 )
@@ -59,9 +60,11 @@ func init() {
 	rootCmd.PersistentFlags().StringVarP(&uri, "uri", "u", "127.0.0.1:6379", "redis server URI")
 	rootCmd.PersistentFlags().IntVarP(&db, "db", "n", 0, "redis database number (default is 0)")
 	rootCmd.PersistentFlags().StringVarP(&password, "password", "p", "", "password to use when connecting to redis server")
+	rootCmd.PersistentFlags().StringVarP(&loglevel, "loglevel", "L", "info", "global log level")
 	viper.BindPFlag("uri", rootCmd.PersistentFlags().Lookup("uri"))
 	viper.BindPFlag("db", rootCmd.PersistentFlags().Lookup("db"))
 	viper.BindPFlag("password", rootCmd.PersistentFlags().Lookup("password"))
+	viper.BindPFlag("loglevel", rootCmd.PersistentFlags().Lookup("loglevel"))
 }
 
 // initConfig reads in config file and ENV variables if set.
@@ -87,4 +90,13 @@ func initConfig() {
 	if err := viper.ReadInConfig(); err == nil {
 		log.Info().Str("file", viper.ConfigFileUsed()).Msg("configFileUsed")
 	}
+	loglevel := viper.GetString("loglevel")
+	l, err := zerolog.ParseLevel(loglevel)
+	if err != nil {
+		log.Error().Err(err).Str("loglevel", loglevel).Msg("Unable to parse log level, default to debug")
+		zerolog.SetGlobalLevel(zerolog.DebugLevel)
+	} else {
+		zerolog.SetGlobalLevel(l)
+	}
+
 }
