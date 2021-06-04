@@ -50,18 +50,27 @@ Default is `exeq` and default priority is 5.
 
 `serveQueues: exeq=5;myQueue=2;bar;spam=1`
 
+Adding `-H/--hostqueue` will automatically add the queue `exeq+$HOSTNAME=5`. 
+
 ## Publish
 
 To publish a command, run `exeq pub -- `, followed by the command. The `--` is needed only
 in the case of flags in the subcommand, to inform the shell that flag options for the `exeq` command are
 finished, and only accept positional arguments after it. However, since many subcommands will have
-flags, it may be a good habit to use it by default. There are no pipes currently.
+flags, it may be a good habit to use it by default.
 
-`exeq pub -- ls -lah $HOME`
+Variables enclosed in single quotes like `'$VAR'` will be expanded by the server. 
+ 
+There are no pipes currently, but redirects `'>'` `'1>'` and `'2>'` may be used.
+
+`exeq pub -- ls -lah '$HOME'`
 
 Commands can be published to a specific queue with `-Q/--queue` or default to the queue `exeq`.
 
-`exeq pub -Q myQueue -- ls -lah $HOME`
+`exeq pub -Q myQueue -- ls -lah '$HOME'`
+
+`-B/--broadcast` will publish the command to each listening server on the queue `exeq+$HOSTNAME`. 
+This works best with `serve -H`. 
 
 
 ## Redirection

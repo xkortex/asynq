@@ -14,22 +14,31 @@ import (
 	"strings"
 )
 
+// Unpack a Task.Payload into an ExeqCommand.
+// This also expands any environment variables
 func UnpackCommand(t *asynq.Task) (cmd ExeqCommand, err error) {
 	cmd.Name, err = t.Payload.GetString("name")
 	if err != nil {
+		log.Error().Err(err).Msg("unpack payload failed")
 		return cmd, err
 	}
-	cmd.Args, err = t.Payload.GetStringSlice("args")
+	args, err := t.Payload.GetStringSlice("args")
 	if err != nil {
+		log.Error().Err(err).Msg("unpack payload failed")
 		return cmd, err
 	}
 	cmd.StdoutFile, err = t.Payload.GetString("stdoutFile")
 	if err != nil {
+		log.Error().Err(err).Msg("unpack payload failed")
 		return cmd, err
 	}
 	cmd.StderrFile, err = t.Payload.GetString("stderrFile")
 	if err != nil {
+		log.Error().Err(err).Msg("unpack payload failed")
 		return cmd, err
+	}
+	for _, val := range args {
+		cmd.Args = append(cmd.Args, os.ExpandEnv(val))
 	}
 	return
 }
